@@ -2,20 +2,59 @@ import { useEffect, useState, useRef } from 'react'
 import API from '../api'
 import { collection, deleteDoc, doc, getDocs, updateDoc } from 'firebase/firestore'
 import { db } from '../firebase'
-import { deleteAllFilesInProductsBucket, supabase } from '../supabase'
+import { deleteAllFilesInProductsBucket, SUPABASE_PRODUCTS_BUCKET, supabase } from '../supabase'
 
 function productActive(p) {
   return p.active !== undefined ? p.active : p.isActive
 }
 
 const CATEGORY_OPTIONS = [
-  { value: 'clothing', label: 'Одежда' },
-  { value: 'shoes', label: 'Обувь' },
-  { value: 'accessories', label: 'Аксессуары' },
-  { value: 'jewelry', label: 'Украшения' },
-  { value: 'bags', label: 'Сумки' },
-  { value: 'perfume', label: 'Парфюм' },
+  { value: 'fitroom_upper', label: 'Футболки / Худи / Свитера / Рубашки', arType: 'fitroom', fitroomClothType: 'upper' },
+  { value: 'fitroom_lower', label: 'Брюки / Джинсы / Шорты / Юбки', arType: 'fitroom', fitroomClothType: 'lower' },
+  { value: 'fitroom_full', label: 'Платья / Комбинезоны / Костюмы', arType: 'fitroom', fitroomClothType: 'full' },
+  { value: 'face_ar_glasses', label: 'Очки (солнечные / оправы / спортивные)', arType: 'face_ar' },
+  { value: 'face_ar_makeup', label: 'Макияж (помада / тени / румяна)', arType: 'face_ar' },
+  { value: 'face_ar_hats', label: 'Кепки / Шапки / Береты', arType: 'face_ar' },
+  { value: 'face_ar_earrings', label: 'Серьги', arType: 'face_ar' },
+  { value: 'wrist_ar_watches', label: 'Часы', arType: 'wrist_ar' },
+  { value: 'wrist_ar_bracelets', label: 'Золотые украшения / Браслеты', arType: 'wrist_ar' },
+  { value: 'hand_ar_rings', label: 'Кольца', arType: 'hand_ar' },
+  { value: 'hand_ar_nails', label: 'Лак для ногтей', arType: 'hand_ar' },
+  { value: 'foot_ar_shoes', label: 'Обувь (кроссовки / туфли / сапоги)', arType: 'foot_ar' },
+  { value: 'room_ar_sofa', label: 'Диваны / Кресла', arType: 'room_ar' },
+  { value: 'room_ar_beds', label: 'Кровати', arType: 'room_ar' },
+  { value: 'room_ar_tables', label: 'Стулья / Столы', arType: 'room_ar' },
+  { value: 'room_ar_tv', label: 'Телевизоры', arType: 'room_ar' },
 ]
+
+const CATEGORY_BY_VALUE = Object.fromEntries(CATEGORY_OPTIONS.map((c) => [c.value, c]))
+
+const CATEGORY_FILTER_OPTIONS = [
+  { value: 'all', label: 'Все категории' },
+  { value: '__fitroom_header__', label: '--- FitRoom ---', disabled: true },
+  { value: 'fitroom_upper', label: 'Футболки / Худи / Свитера / Рубашки' },
+  { value: 'fitroom_lower', label: 'Брюки / Джинсы / Шорты / Юбки' },
+  { value: 'fitroom_full', label: 'Платья / Комбинезоны / Костюмы' },
+  { value: '__face_header__', label: '--- Face AR ---', disabled: true },
+  { value: 'face_ar_all', label: 'Очки / Макияж / Кепки / Серьги' },
+  { value: '__wrist_header__', label: '--- Wrist AR ---', disabled: true },
+  { value: 'wrist_ar_all', label: 'Часы / Браслеты' },
+  { value: '__hand_header__', label: '--- Hand AR ---', disabled: true },
+  { value: 'hand_ar_all', label: 'Кольца / Лак для ногтей' },
+  { value: '__foot_header__', label: '--- Foot AR ---', disabled: true },
+  { value: 'foot_ar_shoes', label: 'Обувь' },
+  { value: '__room_header__', label: '--- Room AR ---', disabled: true },
+  { value: 'room_ar_all', label: 'Мебель / Телевизоры' },
+]
+
+const AR_BADGES = {
+  fitroom: { text: '🧥 FitRoom', bg: '#DBEAFE', color: '#1D4ED8' },
+  face_ar: { text: '👓 Face AR', bg: '#EDE9FE', color: '#6D28D9' },
+  wrist_ar: { text: '⌚ Wrist AR', bg: '#FEF3C7', color: '#B45309' },
+  hand_ar: { text: '💅 Hand AR', bg: '#FCE7F3', color: '#BE185D' },
+  foot_ar: { text: '👟 Foot AR', bg: '#DCFCE7', color: '#166534' },
+  room_ar: { text: '🛋️ Room AR', bg: '#FFEDD5', color: '#C2410C' },
+}
 
 function splitTags(s) {
   return String(s || '')
@@ -27,13 +66,43 @@ function splitTags(s) {
 const emptyForm = () => ({
   title: '',
   price: '',
-  category: 'clothing',
+  category: 'fitroom_upper',
   description: '',
   sizesStr: '',
   colorsStr: '',
   inStock: true,
   shopContact: '',
+  glbUrl: '',
 })
+
+function getCategoryMeta(category) {
+  return CATEGORY_BY_VALUE[category] || CATEGORY_BY_VALUE.fitroom_upper
+}
+
+function getArTypeFromProduct(product) {
+  return product.arType || getCategoryMeta(product.category).arType
+}
+
+function matchesGroupedCategoryFilter(productCategory, filterValue) {
+  if (filterValue === 'all') return true
+  if (filterValue === 'face_ar_all') return ['face_ar_glasses', 'face_ar_makeup', 'face_ar_hats', 'face_ar_earrings'].includes(productCategory)
+  if (filterValue === 'wrist_ar_all') return ['wrist_ar_watches', 'wrist_ar_bracelets'].includes(productCategory)
+  if (filterValue === 'hand_ar_all') return ['hand_ar_rings', 'hand_ar_nails'].includes(productCategory)
+  if (filterValue === 'room_ar_all') return ['room_ar_sofa', 'room_ar_beds', 'room_ar_tables', 'room_ar_tv'].includes(productCategory)
+  return productCategory === filterValue
+}
+
+async function uploadAssetToSupabase(file, folder) {
+  if (!file) return null
+  if (!supabase) throw new Error('Supabase не настроен')
+  const ext = String(file.name || '').split('.').pop() || 'bin'
+  const safeName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+  const path = `${folder}/${safeName}`
+  const { error: upErr } = await supabase.storage.from(SUPABASE_PRODUCTS_BUCKET).upload(path, file, { upsert: false })
+  if (upErr) throw upErr
+  const { data } = supabase.storage.from(SUPABASE_PRODUCTS_BUCKET).getPublicUrl(path)
+  return data.publicUrl
+}
 
 export default function Products() {
   const [products, setProducts] = useState([])
@@ -43,6 +112,8 @@ export default function Products() {
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState(emptyForm())
   const [image, setImage] = useState(null)
+  const [arImage, setArImage] = useState(null)
+  const [glbFile, setGlbFile] = useState(null)
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -54,8 +125,14 @@ export default function Products() {
   /** Edit modal: product id being edited */
   const [editingId, setEditingId] = useState(null)
   const [editForm, setEditForm] = useState(emptyForm())
+  const [editArImage, setEditArImage] = useState(null)
+  const [editGlbFile, setEditGlbFile] = useState(null)
   const [savingEdit, setSavingEdit] = useState(false)
   const fileRef = useRef()
+  const arImageRef = useRef()
+  const glbRef = useRef()
+  const editArImageRef = useRef()
+  const editGlbRef = useRef()
 
   const updateDraft = (id, field, value) => {
     setDrafts((prev) => ({
@@ -109,13 +186,16 @@ export default function Products() {
     setEditForm({
       title: p.title ?? '',
       price: p.price != null ? String(p.price) : '',
-      category: p.category && CATEGORY_OPTIONS.some((c) => c.value === p.category) ? p.category : 'clothing',
+      category: p.category && CATEGORY_OPTIONS.some((c) => c.value === p.category) ? p.category : 'fitroom_upper',
       description: p.description ?? '',
       sizesStr: Array.isArray(p.sizes) ? p.sizes.join(', ') : '',
       colorsStr: Array.isArray(p.colors) ? p.colors.join(', ') : '',
       inStock: p.inStock !== false,
       shopContact: p.shopContact ?? p.sourceUrl ?? '',
+      glbUrl: p.glbUrl ?? '',
     })
+    setEditArImage(null)
+    setEditGlbFile(null)
   }
 
   const saveEdit = async () => {
@@ -125,16 +205,42 @@ export default function Products() {
       const sizes = splitTags(editForm.sizesStr)
       const colors = splitTags(editForm.colorsStr)
       const shop = editForm.shopContact.trim() || null
+      const categoryMeta = getCategoryMeta(editForm.category)
+      const isFitroom = categoryMeta.arType === 'fitroom'
+      const needsTransparentImage = ['face_ar', 'wrist_ar', 'hand_ar', 'foot_ar'].includes(categoryMeta.arType)
+      const needsRoomGlb = categoryMeta.arType === 'room_ar'
+      const hasExistingImage = products.find((x) => x.id === editingId)?.imageUrl
+      if (needsTransparentImage && !hasExistingImage && !editArImage) {
+        throw new Error('Для этой категории нужно загрузить фото товара (PNG без фона)')
+      }
+
+      let nextImageUrl = hasExistingImage || null
+      if (editArImage) {
+        nextImageUrl = await uploadAssetToSupabase(editArImage, 'images')
+      }
+      let nextGlbUrl = editForm.glbUrl.trim() || null
+      if (editGlbFile) {
+        nextGlbUrl = await uploadAssetToSupabase(editGlbFile, 'glb')
+      }
+      if (needsRoomGlb && !nextGlbUrl) {
+        throw new Error('Для Room AR нужно указать 3D модель (.glb)')
+      }
+
       await updateDoc(doc(db, 'products', editingId), {
         title: editForm.title.trim(),
         price: Number(editForm.price) || 0,
         category: editForm.category,
+        arType: categoryMeta.arType,
+        fitroomClothType: isFitroom ? categoryMeta.fitroomClothType : null,
         description: editForm.description.trim() || null,
         sizes,
         colors,
         inStock: editForm.inStock,
         shopContact: shop,
+        shopUsername: shop,
         sourceUrl: shop,
+        imageUrl: nextImageUrl,
+        glbUrl: nextGlbUrl,
       })
       setNotice({ type: 'ok', text: 'Сохранено' })
       setEditingId(null)
@@ -165,6 +271,12 @@ export default function Products() {
     setSaving(true)
     try {
       const fd = new FormData()
+      const categoryMeta = getCategoryMeta(form.category)
+      const needsTransparentImage = ['face_ar', 'wrist_ar', 'hand_ar', 'foot_ar'].includes(categoryMeta.arType)
+      const needsRoomGlb = categoryMeta.arType === 'room_ar'
+      if (needsTransparentImage && !arImage && !image) {
+        throw new Error('Для этой категории нужно загрузить фото товара (PNG без фона)')
+      }
       fd.append('title', form.title)
       fd.append('price', form.price)
       fd.append('category', form.category)
@@ -174,13 +286,32 @@ export default function Products() {
       fd.append('inStock', form.inStock ? 'true' : 'false')
       fd.append('shopContact', form.shopContact)
       if (image) fd.append('image', image)
+      if (arImage) fd.append('image', arImage)
       const res = await API.post('/api/products', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
       if (res.data?.id) {
-        await updateDoc(doc(db, 'products', res.data.id), { active: false })
+        let nextGlbUrl = form.glbUrl.trim() || null
+        if (glbFile) {
+          nextGlbUrl = await uploadAssetToSupabase(glbFile, 'glb')
+        }
+        if (needsRoomGlb && !nextGlbUrl) {
+          throw new Error('Для Room AR нужно указать 3D модель (.glb)')
+        }
+        const imageUrlFromApi = res.data.imageUrl || res.data.photoUrl || res.data.product?.imageUrl || null
+        await updateDoc(doc(db, 'products', res.data.id), {
+          active: false,
+          category: form.category,
+          arType: categoryMeta.arType,
+          fitroomClothType: categoryMeta.arType === 'fitroom' ? categoryMeta.fitroomClothType : null,
+          shopUsername: form.shopContact.trim() || null,
+          glbUrl: nextGlbUrl,
+          ...(imageUrlFromApi ? { imageUrl: imageUrlFromApi } : {}),
+        })
       }
       setShowForm(false)
       setForm(emptyForm())
       setImage(null)
+      setArImage(null)
+      setGlbFile(null)
       load()
     } catch (e) {
       alert('Ошибка: ' + (e.response?.data?.error || e.message))
@@ -226,11 +357,9 @@ export default function Products() {
 
   const filteredProducts = products.filter((product) => {
     const bySearch = (product.title || '').toLowerCase().includes(search.toLowerCase())
-    const byCategory = categoryFilter === 'all' || product.category === categoryFilter
+    const byCategory = matchesGroupedCategoryFilter(product.category, categoryFilter)
     return bySearch && byCategory
   })
-
-  const categories = ['all', ...new Set(products.map((item) => item.category).filter(Boolean))]
   const tagChipStyle = {
     display: 'inline-block',
     fontSize: '12px',
@@ -328,9 +457,9 @@ export default function Products() {
           onChange={(e) => setSearch(e.target.value)}
         />
         <select style={{ ...inputStyle, marginBottom: 0 }} value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
-          {categories.map((category) => (
-            <option key={category} value={category}>
-              {category === 'all' ? 'Все категории' : category}
+          {CATEGORY_FILTER_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value} disabled={option.disabled}>
+              {option.label}
             </option>
           ))}
         </select>
@@ -349,6 +478,72 @@ export default function Products() {
               </option>
             ))}
           </select>
+          <div style={{ marginTop: '-4px', marginBottom: '12px' }}>
+            <span style={{ ...tagChipStyle, backgroundColor: AR_BADGES[getCategoryMeta(form.category).arType].bg, color: AR_BADGES[getCategoryMeta(form.category).arType].color }}>
+              {AR_BADGES[getCategoryMeta(form.category).arType].text}
+            </span>
+          </div>
+          {['face_ar', 'wrist_ar', 'hand_ar'].includes(getCategoryMeta(form.category).arType) && (
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>Фото товара (PNG без фона)</label>
+              <button
+                type="button"
+                onClick={() => arImageRef.current?.click()}
+                style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
+              >
+                {arImage ? `📷 ${arImage.name}` : '📷 Загрузить PNG'}
+              </button>
+              <input ref={arImageRef} type="file" accept="image/png,image/*" style={{ display: 'none' }} onChange={(e) => setArImage(e.target.files?.[0] || null)} />
+              <p style={{ marginTop: 8, color: '#6B7280', fontSize: 12 }}>Загрузите фото товара на белом или прозрачном фоне</p>
+            </div>
+          )}
+          {getCategoryMeta(form.category).arType === 'foot_ar' && (
+            <>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={labelStyle}>Фото товара (PNG без фона)</label>
+                <button
+                  type="button"
+                  onClick={() => arImageRef.current?.click()}
+                  style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
+                >
+                  {arImage ? `📷 ${arImage.name}` : '📷 Загрузить PNG'}
+                </button>
+                <input ref={arImageRef} type="file" accept="image/png,image/*" style={{ display: 'none' }} onChange={(e) => setArImage(e.target.files?.[0] || null)} />
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={labelStyle}>3D модель (.glb)</label>
+                <button
+                  type="button"
+                  onClick={() => glbRef.current?.click()}
+                  style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
+                >
+                  {glbFile ? `🧊 ${glbFile.name}` : '🧊 Загрузить .glb (опционально)'}
+                </button>
+                <input ref={glbRef} type="file" accept=".glb,model/gltf-binary" style={{ display: 'none' }} onChange={(e) => setGlbFile(e.target.files?.[0] || null)} />
+              </div>
+            </>
+          )}
+          {getCategoryMeta(form.category).arType === 'room_ar' && (
+            <>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={labelStyle}>3D модель (.glb)</label>
+                <button
+                  type="button"
+                  onClick={() => glbRef.current?.click()}
+                  style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888', marginBottom: 8 }}
+                >
+                  {glbFile ? `🧊 ${glbFile.name}` : '🧊 Загрузить .glb'}
+                </button>
+                <input ref={glbRef} type="file" accept=".glb,model/gltf-binary" style={{ display: 'none' }} onChange={(e) => setGlbFile(e.target.files?.[0] || null)} />
+                <input
+                  style={inputStyle}
+                  placeholder="или вставьте URL 3D модели (.glb)"
+                  value={form.glbUrl}
+                  onChange={(e) => setForm({ ...form, glbUrl: e.target.value })}
+                />
+              </div>
+            </>
+          )}
           <label style={labelStyle}>Описание</label>
           <textarea
             style={{ ...inputStyle, minHeight: '88px', resize: 'vertical' }}
@@ -480,6 +675,22 @@ export default function Products() {
                         style={rowInputStyle}
                         placeholder="Название"
                       />
+                      {AR_BADGES[getArTypeFromProduct(p)] && (
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            marginTop: 8,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            borderRadius: 999,
+                            padding: '4px 8px',
+                            backgroundColor: AR_BADGES[getArTypeFromProduct(p)].bg,
+                            color: AR_BADGES[getArTypeFromProduct(p)].color,
+                          }}
+                        >
+                          {AR_BADGES[getArTypeFromProduct(p)].text}
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: '12px 16px', minWidth: '120px', verticalAlign: 'middle' }}>
                       <input
@@ -612,6 +823,70 @@ export default function Products() {
                 </option>
               ))}
             </select>
+            <div style={{ marginTop: '-4px', marginBottom: '12px' }}>
+              <span style={{ ...tagChipStyle, backgroundColor: AR_BADGES[getCategoryMeta(editForm.category).arType].bg, color: AR_BADGES[getCategoryMeta(editForm.category).arType].color }}>
+                {AR_BADGES[getCategoryMeta(editForm.category).arType].text}
+              </span>
+            </div>
+            {['face_ar', 'wrist_ar', 'hand_ar'].includes(getCategoryMeta(editForm.category).arType) && (
+              <div style={{ marginBottom: '12px' }}>
+                <label style={labelStyle}>Фото товара (PNG без фона)</label>
+                <button
+                  type="button"
+                  onClick={() => editArImageRef.current?.click()}
+                  style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
+                >
+                  {editArImage ? `📷 ${editArImage.name}` : '📷 Загрузить PNG'}
+                </button>
+                <input ref={editArImageRef} type="file" accept="image/png,image/*" style={{ display: 'none' }} onChange={(e) => setEditArImage(e.target.files?.[0] || null)} />
+                <p style={{ marginTop: 8, color: '#6B7280', fontSize: 12 }}>Загрузите фото товара на белом или прозрачном фоне</p>
+              </div>
+            )}
+            {getCategoryMeta(editForm.category).arType === 'foot_ar' && (
+              <>
+                <div style={{ marginBottom: '12px' }}>
+                  <label style={labelStyle}>Фото товара (PNG без фона)</label>
+                  <button
+                    type="button"
+                    onClick={() => editArImageRef.current?.click()}
+                    style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
+                  >
+                    {editArImage ? `📷 ${editArImage.name}` : '📷 Загрузить PNG'}
+                  </button>
+                  <input ref={editArImageRef} type="file" accept="image/png,image/*" style={{ display: 'none' }} onChange={(e) => setEditArImage(e.target.files?.[0] || null)} />
+                </div>
+                <div style={{ marginBottom: '12px' }}>
+                  <label style={labelStyle}>3D модель (.glb)</label>
+                  <button
+                    type="button"
+                    onClick={() => editGlbRef.current?.click()}
+                    style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
+                  >
+                    {editGlbFile ? `🧊 ${editGlbFile.name}` : '🧊 Загрузить .glb (опционально)'}
+                  </button>
+                  <input ref={editGlbRef} type="file" accept=".glb,model/gltf-binary" style={{ display: 'none' }} onChange={(e) => setEditGlbFile(e.target.files?.[0] || null)} />
+                </div>
+              </>
+            )}
+            {getCategoryMeta(editForm.category).arType === 'room_ar' && (
+              <div style={{ marginBottom: '12px' }}>
+                <label style={labelStyle}>3D модель (.glb)</label>
+                <button
+                  type="button"
+                  onClick={() => editGlbRef.current?.click()}
+                  style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888', marginBottom: 8 }}
+                >
+                  {editGlbFile ? `🧊 ${editGlbFile.name}` : '🧊 Загрузить .glb'}
+                </button>
+                <input ref={editGlbRef} type="file" accept=".glb,model/gltf-binary" style={{ display: 'none' }} onChange={(e) => setEditGlbFile(e.target.files?.[0] || null)} />
+                <input
+                  style={inputStyle}
+                  placeholder="или вставьте URL 3D модели (.glb)"
+                  value={editForm.glbUrl}
+                  onChange={(e) => setEditForm({ ...editForm, glbUrl: e.target.value })}
+                />
+              </div>
+            )}
             <label style={labelStyle}>Описание</label>
             <textarea
               style={{ ...inputStyle, minHeight: '88px', resize: 'vertical' }}
