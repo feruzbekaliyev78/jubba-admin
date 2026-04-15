@@ -64,6 +64,25 @@ const GENDER_OPTIONS = [
 
 const GENDER_BY_VALUE = Object.fromEntries(GENDER_OPTIONS.map((g) => [g.value, g]))
 
+const CATEGORY_MIGRATION_MAP = {
+  clothing: 'fitroom_upper',
+  FitRoom: 'fitroom_upper',
+  shoes: 'foot_ar_shoes',
+  accessories: 'face_ar_glasses',
+  jewelry: 'hand_ar_rings',
+  bags: 'fitroom_upper',
+  perfume: 'fitroom_upper',
+}
+
+const AR_TYPE_MIGRATION_MAP = {
+  fitroom_upper: 'fitroom',
+  fitroom_lower: 'fitroom',
+  fitroom_full: 'fitroom',
+  foot_ar_shoes: 'foot_ar',
+  face_ar_glasses: 'face_ar',
+  hand_ar_rings: 'hand_ar',
+}
+
 function splitTags(s) {
   return String(s || '')
     .split(',')
@@ -135,6 +154,9 @@ export default function Products() {
   /** Full-size photo URL for lightbox, or null */
   const [zoomPhotoUrl, setZoomPhotoUrl] = useState(null)
   const [deletingAll, setDeletingAll] = useState(false)
+  const [migratingCategories, setMigratingCategories] = useState(false)
+  const [migrationProgress, setMigrationProgress] = useState('')
+  const [migrationDone, setMigrationDone] = useState(false)
   /** Edit modal: product id being edited */
   const [editingId, setEditingId] = useState(null)
   const [editForm, setEditForm] = useState(emptyForm())
@@ -372,6 +394,36 @@ export default function Products() {
     }
   }
 
+  const handleCategoryMigration = async () => {
+    if (migratingCategories || migrationDone) return
+    setMigratingCategories(true)
+    setMigrationProgress('Подготовка...')
+    try {
+      const snapshot = await getDocs(collection(db, 'products'))
+      const total = snapshot.docs.length
+      let updated = 0
+      for (const d of snapshot.docs) {
+        const data = d.data() || {}
+        const mappedCategory = CATEGORY_MIGRATION_MAP[data.category] || data.category || 'fitroom_upper'
+        const mappedArType = AR_TYPE_MIGRATION_MAP[mappedCategory] || data.arType || 'fitroom'
+        await updateDoc(doc(db, 'products', d.id), {
+          category: mappedCategory,
+          arType: mappedArType,
+        })
+        updated += 1
+        setMigrationProgress(`Обновлено ${updated} из ${total} товаров`)
+      }
+      setMigrationDone(true)
+      setMigrationProgress(`Обновлено ${updated} из ${total} товаров`)
+      alert('Миграция завершена!')
+      load()
+    } catch (error) {
+      alert('Ошибка миграции: ' + error.message)
+    } finally {
+      setMigratingCategories(false)
+    }
+  }
+
   const filteredProducts = products.filter((product) => {
     const bySearch = (product.title || '').toLowerCase().includes(search.toLowerCase())
     const byCategory = matchesGroupedCategoryFilter(product.category, categoryFilter)
@@ -414,6 +466,25 @@ export default function Products() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
         <h1 style={{ fontSize: '28px', fontWeight: '800' }}>Товары</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {!migrationDone && (
+            <button
+              type="button"
+              onClick={handleCategoryMigration}
+              disabled={migratingCategories}
+              style={{
+                padding: '12px 24px',
+                backgroundColor: '#F97316',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '12px',
+                fontWeight: '700',
+                cursor: migratingCategories ? 'not-allowed' : 'pointer',
+                opacity: migratingCategories ? 0.7 : 1,
+              }}
+            >
+              🔄 Миграция категорий
+            </button>
+          )}
           <button
             type="button"
             onClick={handleDeleteAllProducts}
@@ -448,6 +519,9 @@ export default function Products() {
           </button>
         </div>
       </div>
+      {migrationProgress && (
+        <div style={{ marginBottom: '12px', color: '#9A3412', fontSize: '13px', fontWeight: 600 }}>{migrationProgress}</div>
+      )}
 
       {notice && (
         <div
