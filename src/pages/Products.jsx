@@ -56,6 +56,14 @@ const AR_BADGES = {
   room_ar: { text: '🛋️ Room AR', bg: '#FFEDD5', color: '#C2410C' },
 }
 
+const GENDER_OPTIONS = [
+  { value: 'male', label: 'Мужской', icon: '♂', bg: '#DBEAFE', color: '#1D4ED8' },
+  { value: 'female', label: 'Женский', icon: '♀', bg: '#FCE7F3', color: '#BE185D' },
+  { value: 'unisex', label: 'Унисекс', icon: '⚥', bg: '#F3F4F6', color: '#4B5563' },
+]
+
+const GENDER_BY_VALUE = Object.fromEntries(GENDER_OPTIONS.map((g) => [g.value, g]))
+
 function splitTags(s) {
   return String(s || '')
     .split(',')
@@ -73,6 +81,7 @@ const emptyForm = () => ({
   inStock: true,
   shopContact: '',
   glbUrl: '',
+  gender: 'unisex',
 })
 
 function getCategoryMeta(category) {
@@ -90,6 +99,10 @@ function matchesGroupedCategoryFilter(productCategory, filterValue) {
   if (filterValue === 'hand_ar_all') return ['hand_ar_rings', 'hand_ar_nails'].includes(productCategory)
   if (filterValue === 'room_ar_all') return ['room_ar_sofa', 'room_ar_beds', 'room_ar_tables', 'room_ar_tv'].includes(productCategory)
   return productCategory === filterValue
+}
+
+function getGenderMeta(gender) {
+  return GENDER_BY_VALUE[gender] || GENDER_BY_VALUE.unisex
 }
 
 async function uploadAssetToSupabase(file, folder) {
@@ -193,6 +206,7 @@ export default function Products() {
       inStock: p.inStock !== false,
       shopContact: p.shopContact ?? p.sourceUrl ?? '',
       glbUrl: p.glbUrl ?? '',
+      gender: p.gender || 'unisex',
     })
     setEditArImage(null)
     setEditGlbFile(null)
@@ -236,6 +250,7 @@ export default function Products() {
         sizes,
         colors,
         inStock: editForm.inStock,
+        gender: editForm.gender || 'unisex',
         shopContact: shop,
         shopUsername: shop,
         sourceUrl: shop,
@@ -284,6 +299,7 @@ export default function Products() {
       fd.append('sizes', form.sizesStr)
       fd.append('colors', form.colorsStr)
       fd.append('inStock', form.inStock ? 'true' : 'false')
+      fd.append('gender', form.gender || 'unisex')
       fd.append('shopContact', form.shopContact)
       if (image) fd.append('image', image)
       if (arImage) fd.append('image', arImage)
@@ -302,6 +318,7 @@ export default function Products() {
           category: form.category,
           arType: categoryMeta.arType,
           fitroomClothType: categoryMeta.arType === 'fitroom' ? categoryMeta.fitroomClothType : null,
+          gender: form.gender || 'unisex',
           shopUsername: form.shopContact.trim() || null,
           glbUrl: nextGlbUrl,
           ...(imageUrlFromApi ? { imageUrl: imageUrlFromApi } : {}),
@@ -473,6 +490,14 @@ export default function Products() {
           <label style={labelStyle}>Категория</label>
           <select style={inputStyle} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
             {CATEGORY_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <label style={labelStyle}>Пол</label>
+          <select style={inputStyle} value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}>
+            {GENDER_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>
@@ -691,6 +716,22 @@ export default function Products() {
                           {AR_BADGES[getArTypeFromProduct(p)].text}
                         </span>
                       )}
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          marginTop: 8,
+                          marginLeft: 6,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          borderRadius: 999,
+                          padding: '4px 8px',
+                          backgroundColor: getGenderMeta(p.gender).bg,
+                          color: getGenderMeta(p.gender).color,
+                        }}
+                        title={getGenderMeta(p.gender).label}
+                      >
+                        {getGenderMeta(p.gender).icon}
+                      </span>
                     </td>
                     <td style={{ padding: '12px 16px', minWidth: '120px', verticalAlign: 'middle' }}>
                       <input
@@ -818,6 +859,14 @@ export default function Products() {
             <label style={labelStyle}>Категория</label>
             <select style={inputStyle} value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}>
               {CATEGORY_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <label style={labelStyle}>Пол</label>
+            <select style={inputStyle} value={editForm.gender} onChange={(e) => setEditForm({ ...editForm, gender: e.target.value })}>
+              {GENDER_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>
