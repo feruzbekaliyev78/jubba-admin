@@ -124,6 +124,27 @@ function getGenderMeta(gender) {
   return GENDER_BY_VALUE[gender] || GENDER_BY_VALUE.unisex
 }
 
+const MAX_PRODUCT_PHOTOS = 5
+
+function normalizeProductImages(p) {
+  if (Array.isArray(p.images) && p.images.length > 0) return p.images.filter(Boolean)
+  if (p.imageUrl) return [p.imageUrl]
+  return []
+}
+
+function isTripoArCategory(arType) {
+  return arType && arType !== 'fitroom'
+}
+
+function productThumbUrl(p) {
+  const imgs = normalizeProductImages(p)
+  return imgs[0] || p.imageUrl || null
+}
+
+function isProduct3dReady(p) {
+  return p.model3dReady === true || p.model3dStatus === 'ready'
+}
+
 async function uploadAssetToSupabase(file, folder) {
   if (!file) return null
   if (!supabase) throw new Error('Supabase не настроен')
@@ -143,8 +164,8 @@ export default function Products() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState(emptyForm())
-  const [image, setImage] = useState(null)
-  const [arImage, setArImage] = useState(null)
+  /** create: up to 5 files, one slot = one optional File */
+  const [createPhotoSlots, setCreatePhotoSlots] = useState([null])
   const [glbFile, setGlbFile] = useState(null)
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
@@ -160,13 +181,13 @@ export default function Products() {
   /** Edit modal: product id being edited */
   const [editingId, setEditingId] = useState(null)
   const [editForm, setEditForm] = useState(emptyForm())
-  const [editArImage, setEditArImage] = useState(null)
   const [editGlbFile, setEditGlbFile] = useState(null)
+  /** edit: each slot = existing url and/or new file */
+  const [editPhotoSlots, setEditPhotoSlots] = useState([{}])
   const [savingEdit, setSavingEdit] = useState(false)
-  const fileRef = useRef()
-  const arImageRef = useRef()
+  const [tripoGenStatus, setTripoGenStatus] = useState('')
+  const [tripoTableStatus, setTripoTableStatus] = useState({})
   const glbRef = useRef()
-  const editArImageRef = useRef()
   const editGlbRef = useRef()
 
   const updateDraft = (id, field, value) => {
@@ -230,8 +251,10 @@ export default function Products() {
       glbUrl: p.glbUrl ?? '',
       gender: p.gender || 'unisex',
     })
-    setEditArImage(null)
+    const imgs = normalizeProductImages(p)
+    setEditPhotoSlots(imgs.length > 0 ? imgs.map((url) => ({ url })) : [{}])
     setEditGlbFile(null)
+    setTripoGenStatus('')
   }
 
   const saveEdit = async () => {
@@ -245,15 +268,21 @@ export default function Products() {
       const isFitroom = categoryMeta.arType === 'fitroom'
       const needsTransparentImage = ['face_ar', 'wrist_ar', 'hand_ar', 'foot_ar'].includes(categoryMeta.arType)
       const needsRoomGlb = categoryMeta.arType === 'room_ar'
-      const hasExistingImage = products.find((x) => x.id === editingId)?.imageUrl
-      if (needsTransparentImage && !hasExistingImage && !editArImage) {
+      const hasAnyPhotoSlot = editPhotoSlots.some((s) => s.file || s.url)
+      if (needsTransparentImage && !hasAnyPhotoSlot) {
         throw new Error('Для этой категории нужно загрузить фото товара (PNG без фона)')
       }
 
-      let nextImageUrl = hasExistingImage || null
-      if (editArImage) {
-        nextImageUrl = await uploadAssetToSupabase(editArImage, 'images')
+      const nextImages = []
+      for (const slot of editPhotoSlots) {
+        if (slot.file) {
+          const u = await uploadAssetToSupabase(slot.file, 'images')
+          if (u) nextImages.push(u)
+        } else if (slot.url) {
+          nextImages.push(slot.url)
+        }
       }
+      const nextImageUrl = nextImages[0] || null
       let nextGlbUrl = editForm.glbUrl.trim() || null
       if (editGlbFile) {
         nextGlbUrl = await uploadAssetToSupabase(editGlbFile, 'glb')
@@ -277,6 +306,7 @@ export default function Products() {
         shopUsername: shop,
         sourceUrl: shop,
         imageUrl: nextImageUrl,
+        images: nextImages.length > 0 ? nextImages : [],
         glbUrl: nextGlbUrl,
       })
       setNotice({ type: 'ok', text: 'Сохранено' })
@@ -286,6 +316,23 @@ export default function Products() {
       alert('Ошибка: ' + e.message)
     }
     setSavingEdit(false)
+  }
+
+  const handleTripoGenerate = async (productId, source = 'modal') => {
+    const setStatus = (s) => {
+      if (source === 'modal') setTripoGenStatus(s)
+      else setTripoTableStatus((prev) => ({ ...prev, [productId]: s }))
+    }
+    setStatus('⏳ Генерация 3D...')
+    try {
+      await API.post('/api/tripo3d/generate', { productId })
+      await updateDoc(doc(db, 'products', productId), { model3dReady: true })
+      setStatus('✅ Готово!')
+      load()
+    } catch (err) {
+      setStatus('❌ Ошибка')
+      console.error(err)
+    }
   }
 
   const toggleProductActive = async (p) => {
@@ -311,8 +358,14 @@ export default function Products() {
       const categoryMeta = getCategoryMeta(form.category)
       const needsTransparentImage = ['face_ar', 'wrist_ar', 'hand_ar', 'foot_ar'].includes(categoryMeta.arType)
       const needsRoomGlb = categoryMeta.arType === 'room_ar'
-      if (needsTransparentImage && !arImage && !image) {
+      const createFiles = createPhotoSlots.filter(Boolean)
+      if (needsTransparentImage && createFiles.length === 0) {
         throw new Error('Для этой категории нужно загрузить фото товара (PNG без фона)')
+      }
+      const uploadedUrls = []
+      for (const f of createFiles) {
+        const u = await uploadAssetToSupabase(f, 'images')
+        if (u) uploadedUrls.push(u)
       }
       fd.append('title', form.title)
       fd.append('price', form.price)
@@ -323,8 +376,7 @@ export default function Products() {
       fd.append('inStock', form.inStock ? 'true' : 'false')
       fd.append('gender', form.gender || 'unisex')
       fd.append('shopContact', form.shopContact)
-      if (image) fd.append('image', image)
-      if (arImage) fd.append('image', arImage)
+      if (createFiles[0]) fd.append('image', createFiles[0])
       const res = await API.post('/api/products', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
       if (res.data?.id) {
         let nextGlbUrl = form.glbUrl.trim() || null
@@ -335,6 +387,8 @@ export default function Products() {
           throw new Error('Для Room AR нужно указать 3D модель (.glb)')
         }
         const imageUrlFromApi = res.data.imageUrl || res.data.photoUrl || res.data.product?.imageUrl || null
+        const finalImages = uploadedUrls.length > 0 ? uploadedUrls : imageUrlFromApi ? [imageUrlFromApi] : []
+        const mainUrl = finalImages[0] || imageUrlFromApi || null
         await updateDoc(doc(db, 'products', res.data.id), {
           active: false,
           category: form.category,
@@ -343,13 +397,13 @@ export default function Products() {
           gender: form.gender || 'unisex',
           shopUsername: form.shopContact.trim() || null,
           glbUrl: nextGlbUrl,
-          ...(imageUrlFromApi ? { imageUrl: imageUrlFromApi } : {}),
+          ...(mainUrl ? { imageUrl: mainUrl } : {}),
+          ...(finalImages.length > 0 ? { images: finalImages } : {}),
         })
       }
       setShowForm(false)
       setForm(emptyForm())
-      setImage(null)
-      setArImage(null)
+      setCreatePhotoSlots([null])
       setGlbFile(null)
       load()
     } catch (e) {
@@ -582,45 +636,65 @@ export default function Products() {
               {AR_BADGES[getCategoryMeta(form.category).arType].text}
             </span>
           </div>
-          {['face_ar', 'wrist_ar', 'hand_ar'].includes(getCategoryMeta(form.category).arType) && (
-            <div style={{ marginBottom: '12px' }}>
-              <label style={labelStyle}>Фото товара (PNG без фона)</label>
+          <label style={labelStyle}>Фотографии товара (до {MAX_PRODUCT_PHOTOS})</label>
+          <div style={{ marginBottom: '12px' }}>
+            {createPhotoSlots.map((file, idx) => (
+              <div key={`create-slot-${idx}`} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ fontSize: 13, maxWidth: '100%' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] || null
+                    setCreatePhotoSlots((prev) => {
+                      const next = [...prev]
+                      next[idx] = f
+                      return next
+                    })
+                  }}
+                />
+                {file && <span style={{ fontSize: 12, color: '#64748B' }}>{file.name}</span>}
+                {createPhotoSlots.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCreatePhotoSlots((prev) => {
+                        const next = prev.filter((_, i) => i !== idx)
+                        return next.length ? next : [null]
+                      })
+                    }
+                    style={{ padding: '4px 10px', fontSize: 12, border: '1px solid #fecaca', borderRadius: 8, background: '#fff', cursor: 'pointer' }}
+                  >
+                    Удалить
+                  </button>
+                )}
+              </div>
+            ))}
+            {createPhotoSlots.length < MAX_PRODUCT_PHOTOS && (
               <button
                 type="button"
-                onClick={() => arImageRef.current?.click()}
+                onClick={() => setCreatePhotoSlots((prev) => (prev.length >= MAX_PRODUCT_PHOTOS ? prev : [...prev, null]))}
+                style={{ padding: '8px 14px', border: '1px dashed #cbd5e1', borderRadius: 10, background: '#fafafa', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
+              >
+                + Добавить фото
+              </button>
+            )}
+            {['face_ar', 'wrist_ar', 'hand_ar', 'foot_ar'].includes(getCategoryMeta(form.category).arType) && (
+              <p style={{ marginTop: 8, color: '#6B7280', fontSize: 12 }}>Загрузите фото товара на белом или прозрачном фоне (PNG без фона)</p>
+            )}
+          </div>
+          {getCategoryMeta(form.category).arType === 'foot_ar' && (
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>3D модель (.glb)</label>
+              <button
+                type="button"
+                onClick={() => glbRef.current?.click()}
                 style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
               >
-                {arImage ? `📷 ${arImage.name}` : '📷 Загрузить PNG'}
+                {glbFile ? `🧊 ${glbFile.name}` : '🧊 Загрузить .glb (опционально)'}
               </button>
-              <input ref={arImageRef} type="file" accept="image/png,image/*" style={{ display: 'none' }} onChange={(e) => setArImage(e.target.files?.[0] || null)} />
-              <p style={{ marginTop: 8, color: '#6B7280', fontSize: 12 }}>Загрузите фото товара на белом или прозрачном фоне</p>
+              <input ref={glbRef} type="file" accept=".glb,model/gltf-binary" style={{ display: 'none' }} onChange={(e) => setGlbFile(e.target.files?.[0] || null)} />
             </div>
-          )}
-          {getCategoryMeta(form.category).arType === 'foot_ar' && (
-            <>
-              <div style={{ marginBottom: '12px' }}>
-                <label style={labelStyle}>Фото товара (PNG без фона)</label>
-                <button
-                  type="button"
-                  onClick={() => arImageRef.current?.click()}
-                  style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
-                >
-                  {arImage ? `📷 ${arImage.name}` : '📷 Загрузить PNG'}
-                </button>
-                <input ref={arImageRef} type="file" accept="image/png,image/*" style={{ display: 'none' }} onChange={(e) => setArImage(e.target.files?.[0] || null)} />
-              </div>
-              <div style={{ marginBottom: '12px' }}>
-                <label style={labelStyle}>3D модель (.glb)</label>
-                <button
-                  type="button"
-                  onClick={() => glbRef.current?.click()}
-                  style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
-                >
-                  {glbFile ? `🧊 ${glbFile.name}` : '🧊 Загрузить .glb (опционально)'}
-                </button>
-                <input ref={glbRef} type="file" accept=".glb,model/gltf-binary" style={{ display: 'none' }} onChange={(e) => setGlbFile(e.target.files?.[0] || null)} />
-              </div>
-            </>
           )}
           {getCategoryMeta(form.category).arType === 'room_ar' && (
             <>
@@ -693,23 +767,11 @@ export default function Products() {
             value={form.shopContact}
             onChange={(e) => setForm({ ...form, shopContact: e.target.value })}
           />
-          <div style={{ marginBottom: '16px' }}>
-            <button
-              onClick={() => fileRef.current.click()}
-              style={{
-                padding: '10px 20px',
-                border: '2px dashed #eee',
-                borderRadius: '10px',
-                cursor: 'pointer',
-                backgroundColor: 'transparent',
-                fontSize: '14px',
-                color: '#888',
-              }}
-            >
-              {image ? `📷 ${image.name}` : '📷 Загрузить фото'}
-            </button>
-            <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => setImage(e.target.files[0])} />
-          </div>
+          {isTripoArCategory(getCategoryMeta(form.category).arType) && (
+            <p style={{ marginBottom: 12, fontSize: 12, color: '#6B7280' }}>
+              После сохранения товара можно создать 3D в карточке товара (кнопка «🎲 Создать 3D модель»).
+            </p>
+          )}
           <div style={{ display: 'flex', gap: '12px' }}>
             <button
               onClick={handleSubmit}
@@ -743,13 +805,14 @@ export default function Products() {
               {filteredProducts.map((p) => {
                 const d = drafts[p.id] ?? { title: p.title ?? '', price: p.price != null ? String(p.price) : '' }
                 const active = productActive(p)
+                const thumb = productThumbUrl(p)
                 return (
                   <tr key={p.id} style={{ borderTop: '1px solid #f5f5f5' }}>
                     <td style={{ padding: '12px 16px', verticalAlign: 'middle' }}>
-                      {p.imageUrl ? (
+                      {thumb ? (
                         <button
                           type="button"
-                          onClick={() => setZoomPhotoUrl(p.imageUrl)}
+                          onClick={() => setZoomPhotoUrl(thumb)}
                           style={{
                             padding: 0,
                             border: 'none',
@@ -760,10 +823,10 @@ export default function Products() {
                           }}
                           title="Увеличить"
                         >
-                          <img src={p.imageUrl} alt="" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 8, display: 'block' }} />
+                          <img src={thumb} alt="" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 8, display: 'block' }} />
                         </button>
                       ) : (
-                        <span style={{ fontSize: 32 }}>{p.category === 'clothing' ? '👗' : '👟'}</span>
+                        <span style={{ fontSize: 32 }}>📷</span>
                       )}
                     </td>
                     <td style={{ padding: '12px 16px', minWidth: '180px', verticalAlign: 'middle' }}>
@@ -806,6 +869,23 @@ export default function Products() {
                       >
                         {getGenderMeta(p.gender).icon}
                       </span>
+                      {isProduct3dReady(p) && (
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            marginTop: 8,
+                            marginLeft: 6,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            borderRadius: 999,
+                            padding: '4px 8px',
+                            backgroundColor: '#EDE9FE',
+                            color: '#5B21B6',
+                          }}
+                        >
+                          3D готов
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: '12px 16px', minWidth: '120px', verticalAlign: 'middle' }}>
                       <input
@@ -850,6 +930,29 @@ export default function Products() {
                       >
                         ✏️ Карточка
                       </button>
+                      {isTripoArCategory(getArTypeFromProduct(p)) && thumb && (
+                        <button
+                          type="button"
+                          onClick={() => handleTripoGenerate(p.id, 'table')}
+                          style={{
+                            padding: '8px 10px',
+                            borderRadius: '10px',
+                            border: 'none',
+                            fontSize: '11px',
+                            fontWeight: '700',
+                            cursor: 'pointer',
+                            marginRight: '8px',
+                            backgroundColor: '#7C3AED',
+                            color: '#fff',
+                          }}
+                          title="Создать 3D модель"
+                        >
+                          🎲 3D
+                        </button>
+                      )}
+                      {tripoTableStatus[p.id] && (
+                        <span style={{ fontSize: 11, fontWeight: 600, marginRight: 8, color: '#6B21A8' }}>{tripoTableStatus[p.id]}</span>
+                      )}
                       <button
                         type="button"
                         onClick={() => toggleProductActive(p)}
@@ -912,7 +1015,10 @@ export default function Products() {
             padding: 16,
             boxSizing: 'border-box',
           }}
-          onClick={() => setEditingId(null)}
+          onClick={() => {
+            setEditingId(null)
+            setTripoGenStatus('')
+          }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -951,45 +1057,89 @@ export default function Products() {
                 {AR_BADGES[getCategoryMeta(editForm.category).arType].text}
               </span>
             </div>
-            {['face_ar', 'wrist_ar', 'hand_ar'].includes(getCategoryMeta(editForm.category).arType) && (
-              <div style={{ marginBottom: '12px' }}>
-                <label style={labelStyle}>Фото товара (PNG без фона)</label>
+            <label style={labelStyle}>Фотографии товара (до {MAX_PRODUCT_PHOTOS})</label>
+            <div style={{ marginBottom: '12px' }}>
+              {editPhotoSlots.map((slot, idx) => (
+                <div key={`edit-slot-${idx}`} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                  {slot.url && !slot.file && (
+                    <img src={slot.url} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 8, border: '1px solid #eee' }} />
+                  )}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    style={{ fontSize: 13, maxWidth: '100%' }}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] || null
+                      setEditPhotoSlots((prev) => {
+                        const next = [...prev]
+                        next[idx] = { ...next[idx], file: f || undefined, url: f ? undefined : next[idx]?.url }
+                        return next
+                      })
+                    }}
+                  />
+                  {slot.file && <span style={{ fontSize: 12, color: '#64748B' }}>{slot.file.name}</span>}
+                  {editPhotoSlots.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditPhotoSlots((prev) => {
+                          const next = prev.filter((_, i) => i !== idx)
+                          return next.length ? next : [{}]
+                        })
+                      }
+                      style={{ padding: '4px 10px', fontSize: 12, border: '1px solid #fecaca', borderRadius: 8, background: '#fff', cursor: 'pointer' }}
+                    >
+                      Удалить
+                    </button>
+                  )}
+                </div>
+              ))}
+              {editPhotoSlots.length < MAX_PRODUCT_PHOTOS && (
                 <button
                   type="button"
-                  onClick={() => editArImageRef.current?.click()}
-                  style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
+                  onClick={() => setEditPhotoSlots((prev) => (prev.length >= MAX_PRODUCT_PHOTOS ? prev : [...prev, {}]))}
+                  style={{ padding: '8px 14px', border: '1px dashed #cbd5e1', borderRadius: 10, background: '#fafafa', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
                 >
-                  {editArImage ? `📷 ${editArImage.name}` : '📷 Загрузить PNG'}
+                  + Добавить фото
                 </button>
-                <input ref={editArImageRef} type="file" accept="image/png,image/*" style={{ display: 'none' }} onChange={(e) => setEditArImage(e.target.files?.[0] || null)} />
-                <p style={{ marginTop: 8, color: '#6B7280', fontSize: 12 }}>Загрузите фото товара на белом или прозрачном фоне</p>
+              )}
+              {['face_ar', 'wrist_ar', 'hand_ar', 'foot_ar'].includes(getCategoryMeta(editForm.category).arType) && (
+                <p style={{ marginTop: 8, color: '#6B7280', fontSize: 12 }}>Загрузите фото товара на белом или прозрачном фоне (PNG без фона)</p>
+              )}
+            </div>
+            {isTripoArCategory(getCategoryMeta(editForm.category).arType) && editingId && (
+              <div style={{ marginBottom: '12px' }}>
+                <button
+                  type="button"
+                  onClick={() => handleTripoGenerate(editingId, 'modal')}
+                  style={{
+                    padding: '10px 16px',
+                    border: 'none',
+                    borderRadius: 10,
+                    background: '#7C3AED',
+                    color: '#fff',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    fontSize: 14,
+                  }}
+                >
+                  🎲 Создать 3D модель
+                </button>
+                {tripoGenStatus && <p style={{ marginTop: 8, fontSize: 13, fontWeight: 600 }}>{tripoGenStatus}</p>}
               </div>
             )}
             {getCategoryMeta(editForm.category).arType === 'foot_ar' && (
-              <>
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={labelStyle}>Фото товара (PNG без фона)</label>
-                  <button
-                    type="button"
-                    onClick={() => editArImageRef.current?.click()}
-                    style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
-                  >
-                    {editArImage ? `📷 ${editArImage.name}` : '📷 Загрузить PNG'}
-                  </button>
-                  <input ref={editArImageRef} type="file" accept="image/png,image/*" style={{ display: 'none' }} onChange={(e) => setEditArImage(e.target.files?.[0] || null)} />
-                </div>
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={labelStyle}>3D модель (.glb)</label>
-                  <button
-                    type="button"
-                    onClick={() => editGlbRef.current?.click()}
-                    style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
-                  >
-                    {editGlbFile ? `🧊 ${editGlbFile.name}` : '🧊 Загрузить .glb (опционально)'}
-                  </button>
-                  <input ref={editGlbRef} type="file" accept=".glb,model/gltf-binary" style={{ display: 'none' }} onChange={(e) => setEditGlbFile(e.target.files?.[0] || null)} />
-                </div>
-              </>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={labelStyle}>3D модель (.glb)</label>
+                <button
+                  type="button"
+                  onClick={() => editGlbRef.current?.click()}
+                  style={{ padding: '10px 20px', border: '2px dashed #eee', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'transparent', fontSize: '14px', color: '#888' }}
+                >
+                  {editGlbFile ? `🧊 ${editGlbFile.name}` : '🧊 Загрузить .glb (опционально)'}
+                </button>
+                <input ref={editGlbRef} type="file" accept=".glb,model/gltf-binary" style={{ display: 'none' }} onChange={(e) => setEditGlbFile(e.target.files?.[0] || null)} />
+              </div>
             )}
             {getCategoryMeta(editForm.category).arType === 'room_ar' && (
               <div style={{ marginBottom: '12px' }}>
@@ -1067,7 +1217,14 @@ export default function Products() {
               >
                 {savingEdit ? 'Сохранение...' : 'Сохранить в Firestore'}
               </button>
-              <button type="button" onClick={() => setEditingId(null)} style={{ flex: 1, padding: '14px', backgroundColor: 'transparent', border: '1px solid #eee', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingId(null)
+                  setTripoGenStatus('')
+                }}
+                style={{ flex: 1, padding: '14px', backgroundColor: 'transparent', border: '1px solid #eee', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }}
+              >
                 Отмена
               </button>
             </div>
